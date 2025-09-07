@@ -9,6 +9,8 @@
 #include <cstring>      // Для strerror
 #include <stdexcept>    // Для исключений
 
+#include "serial_port_util.h"
+
 // Функция вычисления CRC16 Modbus
 uint16_t crc16_modbus(const uint8_t *data, size_t length) {
     uint16_t crc = 0xFFFF; // Инициализация CRC стартовым значением
@@ -48,6 +50,7 @@ ModbusRTUReader::~ModbusRTUReader() {
 // Основной цикл чтения данных из порта
 void ModbusRTUReader::readLoop() const {
     std::vector<uint8_t> buffer; // Буфер для накопления байт пакета
+    buffer.clear();
     using clock = std::chrono::steady_clock; // Тип часов для измерения времени
     auto lastByteTime = clock::now(); // Время получения последнего байта
 
@@ -59,10 +62,13 @@ void ModbusRTUReader::readLoop() const {
     while (true) {
         uint8_t byte;
         ssize_t n = read(fd, &byte, 1); // Читаем 1 байт из порта
+
         if (n < 0) {
             std::cerr << "Ошибка чтения: " << strerror(errno) << std::endl;
             continue; // При ошибке чтения продолжаем попытки
-        } else if (n == 0) {
+        }
+
+        if (n == 0 && buffer.size() != 8) {
             // Нет данных, можно подождать немного
             usleep(1000); // 1 мс
             continue;
@@ -79,39 +85,11 @@ void ModbusRTUReader::readLoop() const {
                 buffer.clear(); // Очищаем буфер для нового пакета
             }
         }
-
-        buffer.push_back(byte); // Добавляем байт в буфер
-        lastByteTime = now; // Обновляем время последнего байта
-    }
-}
-
-// Настройка параметров последовательного порта
-void ModbusRTUReader::configurePort(speed_t baudRate) const {
-    struct termios tty;
-    if (tcgetattr(fd, &tty) != 0) {
-        close(fd);
-        throw std::runtime_error("Ошибка tcgetattr: " + std::string(strerror(errno)));
-    }
-
-    cfsetospeed(&tty, baudRate); // Установка скорости передачи (выход)
-    cfsetispeed(&tty, baudRate); // Установка скорости передачи (вход)
-
-    tty.c_cflag = (tty.c_cflag & ~CSIZE) | CS8; // 8 бит данных
-    tty.c_iflag &= ~IGNBRK; // Не игнорировать BREAK
-    tty.c_lflag = 0; // Режим "raw" (без обработки)
-    tty.c_oflag = 0; // Вывод без обработки
-    tty.c_cc[VMIN] = 0; // Минимум байт для чтения
-    tty.c_cc[VTIME] = 0; // Таймаут чтения
-
-    tty.c_iflag &= ~(IXON | IXOFF | IXANY); // Отключаем управление потоком XON/XOFF
-    tty.c_cflag |= (CLOCAL | CREAD); // Включаем прием и локальный режим
-    tty.c_cflag &= ~(PARENB | PARODD); // Без проверки четности
-    tty.c_cflag &= ~CSTOPB; // 1 стоп-бит
-    tty.c_cflag &= ~CRTSCTS; // Отключаем аппаратное управление потоком
-
-    if (tcsetattr(fd, TCSANOW, &tty) != 0) {
-        close(fd);
-        throw std::runtime_error("Ошибка tcsetattr: " + std::string(strerror(errno)));
+        // Добавляем байт в буфер
+        if (n == 1) {
+            buffer.push_back(byte);
+            lastByteTime = now; // Обновляем время последнего байта
+        }
     }
 }
 
@@ -144,3 +122,33 @@ void ModbusRTUReader::processPacket(const std::vector<uint8_t> &packet) {
     // Здесь можно добавить обработку данных пакета по протоколу Modbus
 }
 
+
+// Настройка параметров последовательного порта
+void ModbusRTUReader::configurePort(speed_t baudRate) const {
+    struct termios tty;
+    if (tcgetattr(fd, &tty) != 0) {
+        close(fd);
+        throw std::runtime_error("Ошибка tcgetattr: " + std::string(strerror(errno)));
+    }
+
+    cfsetospeed(&tty, baudRate); // Установка скорости передачи (выход)
+    cfsetispeed(&tty, baudRate); // Установка скорости передачи (вход)
+
+    tty.c_cflag = (tty.c_cflag & ~CSIZE) | CS8; // 8 бит данных
+    tty.c_iflag &= ~IGNBRK; // Не игнорировать BREAK
+    tty.c_lflag = 0; // Режим "raw" (без обработки)
+    tty.c_oflag = 0; // Вывод без обработки
+    tty.c_cc[VMIN] = 0; // Минимум байт для чтения
+    tty.c_cc[VTIME] = 0; // Таймаут чтения
+
+    tty.c_iflag &= ~(IXON | IXOFF | IXANY); // Отключаем управление потоком XON/XOFF
+    tty.c_cflag |= (CLOCAL | CREAD); // Включаем прием и локальный режим
+    tty.c_cflag &= ~(PARENB | PARODD); // Без проверки четности
+    tty.c_cflag &= ~CSTOPB; // 1 стоп-бит
+    tty.c_cflag &= ~CRTSCTS; // Отключаем аппаратное управление потоком
+
+    if (tcsetattr(fd, TCSANOW, &tty) != 0) {
+        close(fd);
+        throw std::runtime_error("Ошибка tcsetattr: " + std::string(strerror(errno)));
+    }
+}

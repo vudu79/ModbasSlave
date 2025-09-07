@@ -14,7 +14,7 @@
 int main() {
 
     try {
-        ModbusRTUReader reader("/dev/ttys001", B9600);
+        const ModbusRTUReader reader("/dev/ttys007", B9600);
         reader.readLoop();
     }
     catch (const std::exception& ex) {
