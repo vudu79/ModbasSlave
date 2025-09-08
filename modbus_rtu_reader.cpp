@@ -133,7 +133,10 @@ void ModbusRTUReader::checkRequestADU(std::vector<uint8_t> &packet) {
 void ModbusRTUReader::printHEXPacket(std::vector<uint8_t> &packet) {
     uint8_t functionNumber = packet[1];
     uint8_t slaveNumber = packet[0];
-    printf("Ответный пакет на команду № %d от устройства № %d сформирован - ", functionNumber, slaveNumber);
+    if (functionNumber  & 0x80) {
+        printf("Пакет с кодом ошибки на команду № %d от устройства № %d сформирован: ", functionNumber, slaveNumber);
+    }
+    printf("Ответный пакет на команду № %d от устройства № %d сформирован: ", functionNumber, slaveNumber);
     for (auto b: packet) {
         printf("%02X ", b);
     }
@@ -145,7 +148,7 @@ void ModbusRTUReader::configurePort(speed_t baudRate) const {
     termios tty{}; // !!!!!!!!!!!!!!!!!!!!!!!!!!!!
     if (tcgetattr(fd, &tty) != 0) {
         close(fd);
-        throw std::runtime_error("Ошибка при настройке порта: " + std::string(strerror(errno)));
+        throw std::runtime_error("Ошибка пtcsetattr: " + std::string(strerror(errno)));
     }
 
     cfsetospeed(&tty, baudRate); // Установка скорости передачи (выход)
