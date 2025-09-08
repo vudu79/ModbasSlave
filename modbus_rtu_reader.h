@@ -7,7 +7,6 @@
 
 #include <string>
 #include <vector>
-#include <cstdint>
 #include <termios.h> // Для speed_t
 
 
@@ -49,13 +48,6 @@ typedef struct {
     uint8_t discrete_inputs[MAX_REGISTERS];
 } modbus_registers_t;
 
-// Глобальные переменные
-modbus_registers_t registers;
-uint8_t rx_buffer[MAX_FRAME_SIZE];
-std::vector<uint8_t> tx_buffer;
-uint8_t rx_index = 0;
-uint8_t frame_received = 0;
-
 
 // Функция вычисления CRC16 Modbus
 // uint16_t crc16_modbus(const uint8_t* data, size_t length);
@@ -77,21 +69,21 @@ private:
 
     void configurePort(speed_t baudRate) const;
 
-    void createErrorResponse(uint8_t function_code, uint8_t error_code);
+    void createErrorResponse(uint8_t function_code, uint8_t error_code) const;
 
     void checkRequestADU(std::vector<uint8_t> &packet);
 
     static void printHEXPacket(std::vector<uint8_t> &packet);
 
-    void handleReadCoils(std::vector<uint8_t> &frame);
+    void handleReadCoils(std::vector<uint8_t> &frame) const;
 
-    void handleReadHoldingRegisters(std::vector<uint8_t> &frame);
+    void handleReadHoldingRegisters(std::vector<uint8_t> &frame) const;
 
     void handleWriteSingleRegister(std::vector<uint8_t> &frame);
 
     void handleWriteMultipleRegisters(std::vector<uint8_t> &frame);
 
-    void sendResponseToMaster(std::vector<uint8_t> &frame) const;
+    void sendResponseToMaster(std::vector<uint8_t> &frame, int len) const;
 
     void processRequestADU(std::vector<uint8_t> &frame);
 };

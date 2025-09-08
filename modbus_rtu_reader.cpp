@@ -9,7 +9,11 @@
 #include <cstring>      // Для strerror
 #include <stdexcept>    // Для исключений
 
-#include "serial_port_util.h"
+// Глобальные переменные
+modbus_registers_t registers;
+std::vector<uint8_t> tx_buffer(MAX_FRAME_SIZE);
+uint8_t rx_index = 0;
+uint8_t frame_received = 0;
 
 // Функция вычисления CRC16 Modbus
 uint16_t crc16_modbus(std::vector<uint8_t> &frame, size_t length) {
@@ -94,9 +98,8 @@ void ModbusRTUReader::readLoop() {
 
 // Обработка завершённого пакета
 void ModbusRTUReader::checkRequestADU(std::vector<uint8_t> &packet) {
-
     // не наш адрес или не широковещательный - не берем
-    if (packet[0] != MODBUS_SLAVE_ADDRESS  && packet[0] != MODBUS_BROADCAST_ADDRESS) {
+    if (packet[0] != MODBUS_SLAVE_ADDRESS && packet[0] != MODBUS_BROADCAST_ADDRESS) {
         return; // Не наш адрес
     }
 
@@ -128,7 +131,9 @@ void ModbusRTUReader::checkRequestADU(std::vector<uint8_t> &packet) {
 }
 
 void ModbusRTUReader::printHEXPacket(std::vector<uint8_t> &packet) {
-    std::cout << "Пакет ADU: ";
+    uint8_t functionNumber = packet[1];
+    uint8_t slaveNumber = packet[0];
+    printf("Ответный пакет на команду № %d от устройства № %d сформирован - ", functionNumber, slaveNumber);
     for (auto b: packet) {
         printf("%02X ", b);
     }
@@ -140,7 +145,7 @@ void ModbusRTUReader::configurePort(speed_t baudRate) const {
     termios tty{}; // !!!!!!!!!!!!!!!!!!!!!!!!!!!!
     if (tcgetattr(fd, &tty) != 0) {
         close(fd);
-        throw std::runtime_error("Ошибка tcgetattr: " + std::string(strerror(errno)));
+        throw std::runtime_error("Ошибка при настройке порта: " + std::string(strerror(errno)));
     }
 
     cfsetospeed(&tty, baudRate); // Установка скорости передачи (выход)
@@ -166,7 +171,7 @@ void ModbusRTUReader::configurePort(speed_t baudRate) const {
 }
 
 // Создание ответа с ошибкой
-void ModbusRTUReader::createErrorResponse(uint8_t function_code, uint8_t error_code) {
+void ModbusRTUReader::createErrorResponse(uint8_t function_code, uint8_t error_code) const {
     tx_buffer[0] = MODBUS_SLAVE_ADDRESS;
     tx_buffer[1] = function_code | 0x80; // Установка бита ошибки
     tx_buffer[2] = error_code;
@@ -175,23 +180,25 @@ void ModbusRTUReader::createErrorResponse(uint8_t function_code, uint8_t error_c
     tx_buffer[3] = crc & 0xFF;
     tx_buffer[4] = (crc >> 8) & 0xFF;
 
-    sendResponseToMaster(tx_buffer);
+    sendResponseToMaster(tx_buffer, 4);
 }
 
 // Отправка ответа на команду мастера в порт
-void ModbusRTUReader::sendResponseToMaster(std::vector<uint8_t> &frame) const {
-    const auto frame_size = frame.size();
-    std::vector<uint8_t> data(frame_size);
+void ModbusRTUReader::sendResponseToMaster(std::vector<uint8_t> &frame, int len) const {
+    std::vector<uint8_t> data(len);
     std::copy(frame.begin(), frame.end(), data.begin());
 
-    ssize_t w = write(fd, data.data(), frame_size);
+    printHEXPacket(data);
 
-    printf("Пакет размером %ld отправлен в порт 1\n", w);
+    ssize_t w = write(fd, data.data(), len);
+    printf("Размер пакета - %d. Отправлено - %ld\n", len, w);
+
+
 }
 
 
 // Обработка команды Read Coils (0x01) Чтение дискретных выходов
-void ModbusRTUReader::handleReadCoils(std::vector<uint8_t> &frame) {
+void ModbusRTUReader::handleReadCoils(std::vector<uint8_t> &frame) const {
     uint16_t start_address = (frame[2] << 8) | frame[3];
     uint16_t quantity = (frame[4] << 8) | frame[5];
 
@@ -219,13 +226,13 @@ void ModbusRTUReader::handleReadCoils(std::vector<uint8_t> &frame) {
     tx_buffer[3 + byte_count] = crc & 0xFF;
     tx_buffer[4 + byte_count] = (crc >> 8) & 0xFF;
 
-    sendResponseToMaster(tx_buffer);
+    sendResponseToMaster(tx_buffer, 4 + byte_count);
 }
 
 // Обработка команды Read Holding Registers (0x03) Чтение аналоговых выходов
-void ModbusRTUReader::handleReadHoldingRegisters(std::vector<uint8_t> &frame) {
-    uint16_t start_address = (frame[2] << 8) | frame[3];
-    uint16_t quantity = (frame[4] << 8) | frame[5];
+void ModbusRTUReader::handleReadHoldingRegisters(std::vector<uint8_t> &frame) const {
+    const uint16_t start_address = (frame[2] << 8) | frame[3];
+    const uint16_t quantity = (frame[4] << 8) | frame[5];
 
     if (start_address + quantity > MAX_REGISTERS) {
         createErrorResponse(READ_HOLDING_REGISTERS, ILLEGAL_DATA_ADDRESS);
@@ -245,8 +252,9 @@ void ModbusRTUReader::handleReadHoldingRegisters(std::vector<uint8_t> &frame) {
     uint16_t crc = crc16_modbus(tx_buffer, 3 + quantity * 2);
     tx_buffer[3 + quantity * 2] = crc & 0xFF;
     tx_buffer[4 + quantity * 2] = (crc >> 8) & 0xFF;
+    u_int8_t rrr = 4 + quantity * 2;
 
-    sendResponseToMaster(tx_buffer);
+    sendResponseToMaster(tx_buffer, (5 + quantity * 2));
 }
 
 // Обработка команды Write Single Register (0x06)
@@ -268,7 +276,7 @@ void ModbusRTUReader::handleWriteSingleRegister(std::vector<uint8_t> &frame) {
     tx_buffer[6] = crc & 0xFF;
     tx_buffer[7] = (crc >> 8) & 0xFF;
 
-    sendResponseToMaster(tx_buffer);
+    sendResponseToMaster(tx_buffer, 7);
 }
 
 // Обработка команды Write Multiple Registers (0x10)
@@ -300,7 +308,7 @@ void ModbusRTUReader::handleWriteMultipleRegisters(std::vector<uint8_t> &frame) 
     tx_buffer[6] = crc & 0xFF;
     tx_buffer[7] = (crc >> 8) & 0xFF;
 
-    sendResponseToMaster(tx_buffer);
+    sendResponseToMaster(tx_buffer, 7);
 }
 
 // Обработка Modbus кадра

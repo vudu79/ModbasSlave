@@ -4,13 +4,13 @@
 #include <iostream>
 #include "modbus_rtu_reader.h"
 
-#define BUF_SIZE 256
+// #define BUF_SIZE 256
 
-// TIP To <b>Run</b> code, press <shortcut actionId="Run"/> or click the <icon src="AllIcons.Actions.Execute"/> icon in the gutter.
+
 int main() {
 
     try {
-        ModbusRTUReader reader("/dev/ttys002", B9600);
+        ModbusRTUReader reader("/dev/ttys004", B9600);
         reader.readLoop();
     }
     catch (const std::exception& ex) {
