@@ -12,23 +12,22 @@
 #include "serial_port_util.h"
 
 // Функция вычисления CRC16 Modbus
-uint16_t crc16_modbus(const uint8_t *data, size_t length) {
+uint16_t crc16_modbus(std::vector<uint8_t> &frame, size_t length) {
     uint16_t crc = 0xFFFF; // Инициализация CRC стартовым значением
     for (size_t pos = 0; pos < length; pos++) {
-        crc ^= (uint16_t) data[pos]; // XOR с очередным байтом
-        for (int i = 8; i != 0; i--) {
-            // Обработка каждого бита
-            if ((crc & 0x0001) != 0) {
-                // Если младший бит равен 1
-                crc >>= 1; // Сдвиг вправо
-                crc ^= 0xA001; // XOR с полиномом Modbus
+        crc ^= static_cast<uint16_t>(frame[pos]); // XOR с очередным байтом
+        for (int i = 0; i < 8; i++) {
+            if (crc & 0x0001) {
+                crc >>= 1;
+                crc ^= 0xA001;
             } else {
-                crc >>= 1; // Иначе просто сдвиг вправо
+                crc >>= 1;
             }
         }
     }
-    return crc; // Возвращаем вычисленное CRC
-}
+    return crc;
+} // Возвращаем вычисленное CRC
+
 
 // Класс для чтения и разбора Modbus RTU пакетов
 ModbusRTUReader::ModbusRTUReader(const std::string &device, speed_t baudRate) : fd(-1)
@@ -48,16 +47,16 @@ ModbusRTUReader::~ModbusRTUReader() {
 }
 
 // Основной цикл чтения данных из порта
-void ModbusRTUReader::readLoop() const {
+void ModbusRTUReader::readLoop() {
     std::vector<uint8_t> buffer; // Буфер для накопления байт пакета
     buffer.clear();
     using clock = std::chrono::steady_clock; // Тип часов для измерения времени
     auto lastByteTime = clock::now(); // Время получения последнего байта
 
-    // Таймаут 3.5 символа в микросекундах (пример для 9600 бод)
+    // Таймаут 3.5 (по протоколу) символа в микросекундах (используем 9600 бод)
     // 1 символ ~ 11 бит / 9600 бод = ~1.15 мс
     // 3.5 символа ~ 4 мс = 4000 мкс
-    const auto timeout = std::chrono::microseconds(4000);
+    constexpr auto timeout = std::chrono::microseconds(4000);
 
     while (true) {
         uint8_t byte;
@@ -69,7 +68,7 @@ void ModbusRTUReader::readLoop() const {
         }
 
         if (n == 0 && buffer.size() != 8) {
-            // Нет данных, можно подождать немного
+            // Нет данных, ждем
             usleep(1000); // 1 мс
             continue;
         }
@@ -81,7 +80,7 @@ void ModbusRTUReader::readLoop() const {
             auto diff = std::chrono::duration_cast<std::chrono::microseconds>(now - lastByteTime);
             if (diff > timeout) {
                 // Если пауза больше 3.5 символов — считаем пакет завершённым
-                processPacket(buffer); // Обрабатываем накопленный пакет
+                checkRequestADU(buffer); // Обрабатываем накопленный пакет
                 buffer.clear(); // Очищаем буфер для нового пакета
             }
         }
@@ -94,7 +93,13 @@ void ModbusRTUReader::readLoop() const {
 }
 
 // Обработка завершённого пакета
-void ModbusRTUReader::processPacket(const std::vector<uint8_t> &packet) {
+void ModbusRTUReader::checkRequestADU(std::vector<uint8_t> &packet) {
+
+    // не наш адрес или не широковещательный - не берем
+    if (packet[0] != MODBUS_SLAVE_ADDRESS  && packet[0] != MODBUS_BROADCAST_ADDRESS) {
+        return; // Не наш адрес
+    }
+
     if (packet.size() < 4) {
         // Минимальный размер пакета: адрес(1) + функция(1) + CRC(2)
         std::cerr << "Пакет слишком короткий, игнорируем" << std::endl;
@@ -102,7 +107,7 @@ void ModbusRTUReader::processPacket(const std::vector<uint8_t> &packet) {
     }
 
     // Вычисляем CRC по всем байтам, кроме последних двух (CRC в конце)
-    uint16_t crcCalc = crc16_modbus(packet.data(), packet.size() - 2);
+    uint16_t crcCalc = crc16_modbus(packet, packet.size() - 2);
     // Извлекаем CRC из пакета (младший байт + старший байт)
     uint16_t crcPacket = packet[packet.size() - 2] | (packet[packet.size() - 1] << 8);
 
@@ -112,20 +117,27 @@ void ModbusRTUReader::processPacket(const std::vector<uint8_t> &packet) {
     }
 
     // Если CRC верен — выводим пакет в консоль
-    std::cout << "Получен корректный пакет Modbus RTU: ";
+    std::cout << "Получен корректный пакет ADU: ";
     for (auto b: packet) {
         printf("%02X ", b);
     }
-
     std::cout << std::endl;
 
-    // Здесь можно добавить обработку данных пакета по протоколу Modbus
+    // Разбираем полученный ADU, реагируем на команду
+    processRequestADU(packet);
 }
 
+void ModbusRTUReader::printHEXPacket(std::vector<uint8_t> &packet) {
+    std::cout << "Пакет ADU: ";
+    for (auto b: packet) {
+        printf("%02X ", b);
+    }
+    std::cout << std::endl;
+}
 
 // Настройка параметров последовательного порта
 void ModbusRTUReader::configurePort(speed_t baudRate) const {
-    struct termios tty;
+    termios tty{}; // !!!!!!!!!!!!!!!!!!!!!!!!!!!!
     if (tcgetattr(fd, &tty) != 0) {
         close(fd);
         throw std::runtime_error("Ошибка tcgetattr: " + std::string(strerror(errno)));
@@ -152,3 +164,196 @@ void ModbusRTUReader::configurePort(speed_t baudRate) const {
         throw std::runtime_error("Ошибка tcsetattr: " + std::string(strerror(errno)));
     }
 }
+
+// Создание ответа с ошибкой
+void ModbusRTUReader::createErrorResponse(uint8_t function_code, uint8_t error_code) {
+    tx_buffer[0] = MODBUS_SLAVE_ADDRESS;
+    tx_buffer[1] = function_code | 0x80; // Установка бита ошибки
+    tx_buffer[2] = error_code;
+
+    uint16_t crc = crc16_modbus(tx_buffer, 3);
+    tx_buffer[3] = crc & 0xFF;
+    tx_buffer[4] = (crc >> 8) & 0xFF;
+
+    sendResponseToMaster(tx_buffer);
+}
+
+// Отправка ответа на команду мастера в порт
+void ModbusRTUReader::sendResponseToMaster(std::vector<uint8_t> &frame) const {
+    const auto frame_size = frame.size();
+    std::vector<uint8_t> data(frame_size);
+    std::copy(frame.begin(), frame.end(), data.begin());
+
+    ssize_t w = write(fd, data.data(), frame_size);
+
+    printf("Пакет размером %ld отправлен в порт 1\n", w);
+}
+
+
+// Обработка команды Read Coils (0x01) Чтение дискретных выходов
+void ModbusRTUReader::handleReadCoils(std::vector<uint8_t> &frame) {
+    uint16_t start_address = (frame[2] << 8) | frame[3];
+    uint16_t quantity = (frame[4] << 8) | frame[5];
+
+    if (start_address + quantity > MAX_REGISTERS) {
+        createErrorResponse(READ_COILS, ILLEGAL_DATA_ADDRESS);
+        return;
+    }
+
+    uint8_t byte_count = (quantity + 7) / 8;
+    tx_buffer[0] = MODBUS_SLAVE_ADDRESS;
+    tx_buffer[1] = READ_COILS;
+    tx_buffer[2] = byte_count;
+
+    uint8_t i, j;
+    for (i = 0; i < byte_count; i++) {
+        tx_buffer[3 + i] = 0;
+        for (j = 0; j < 8 && (i * 8 + j) < quantity; j++) {
+            if (registers.coils[start_address + i * 8 + j]) {
+                tx_buffer[3 + i] |= (1 << j);
+            }
+        }
+    }
+
+    uint16_t crc = crc16_modbus(tx_buffer, 3 + byte_count);
+    tx_buffer[3 + byte_count] = crc & 0xFF;
+    tx_buffer[4 + byte_count] = (crc >> 8) & 0xFF;
+
+    sendResponseToMaster(tx_buffer);
+}
+
+// Обработка команды Read Holding Registers (0x03) Чтение аналоговых выходов
+void ModbusRTUReader::handleReadHoldingRegisters(std::vector<uint8_t> &frame) {
+    uint16_t start_address = (frame[2] << 8) | frame[3];
+    uint16_t quantity = (frame[4] << 8) | frame[5];
+
+    if (start_address + quantity > MAX_REGISTERS) {
+        createErrorResponse(READ_HOLDING_REGISTERS, ILLEGAL_DATA_ADDRESS);
+        return;
+    }
+
+    tx_buffer[0] = MODBUS_SLAVE_ADDRESS;
+    tx_buffer[1] = READ_HOLDING_REGISTERS;
+    tx_buffer[2] = quantity * 2;
+
+    uint8_t i;
+    for (i = 0; i < quantity; i++) {
+        tx_buffer[3 + i * 2] = (registers.holding_registers[start_address + i] >> 8) & 0xFF;
+        tx_buffer[4 + i * 2] = registers.holding_registers[start_address + i] & 0xFF;
+    }
+
+    uint16_t crc = crc16_modbus(tx_buffer, 3 + quantity * 2);
+    tx_buffer[3 + quantity * 2] = crc & 0xFF;
+    tx_buffer[4 + quantity * 2] = (crc >> 8) & 0xFF;
+
+    sendResponseToMaster(tx_buffer);
+}
+
+// Обработка команды Write Single Register (0x06)
+void ModbusRTUReader::handleWriteSingleRegister(std::vector<uint8_t> &frame) {
+    uint16_t address = (frame[2] << 8) | frame[3];
+    uint16_t value = (frame[4] << 8) | frame[5];
+
+    if (address >= MAX_REGISTERS) {
+        createErrorResponse(WRITE_SINGLE_REGISTER, ILLEGAL_DATA_ADDRESS);
+        return;
+    }
+
+    registers.holding_registers[address] = value;
+
+    // Эхо ответа
+    memcpy(tx_buffer.data(), frame.data(), 8);
+
+    uint16_t crc = crc16_modbus(tx_buffer, 6);
+    tx_buffer[6] = crc & 0xFF;
+    tx_buffer[7] = (crc >> 8) & 0xFF;
+
+    sendResponseToMaster(tx_buffer);
+}
+
+// Обработка команды Write Multiple Registers (0x10)
+void ModbusRTUReader::handleWriteMultipleRegisters(std::vector<uint8_t> &frame) {
+    uint16_t start_address = (frame[2] << 8) | frame[3];
+    uint16_t quantity = (frame[4] << 8) | frame[5];
+    uint8_t byte_count = frame[6];
+
+    if (start_address + quantity > MAX_REGISTERS || byte_count != quantity * 2) {
+        createErrorResponse(WRITE_MULTIPLE_REGISTERS, ILLEGAL_DATA_ADDRESS);
+        return;
+    }
+
+    uint8_t i;
+    for (i = 0; i < quantity; i++) {
+        registers.holding_registers[start_address + i] =
+                (frame[8 + i * 2] << 8) | frame[9 + i * 2];
+    }
+
+    // Ответ
+    tx_buffer[0] = MODBUS_SLAVE_ADDRESS;
+    tx_buffer[1] = WRITE_MULTIPLE_REGISTERS;
+    tx_buffer[2] = (start_address >> 8) & 0xFF;
+    tx_buffer[3] = start_address & 0xFF;
+    tx_buffer[4] = (quantity >> 8) & 0xFF;
+    tx_buffer[5] = quantity & 0xFF;
+
+    uint16_t crc = crc16_modbus(tx_buffer, 6);
+    tx_buffer[6] = crc & 0xFF;
+    tx_buffer[7] = (crc >> 8) & 0xFF;
+
+    sendResponseToMaster(tx_buffer);
+}
+
+// Обработка Modbus кадра
+void ModbusRTUReader::processRequestADU(std::vector<uint8_t> &frame) {
+    uint8_t function_code = frame[1];
+    switch (function_code) {
+        case READ_COILS:
+            handleReadCoils(frame);
+            break;
+        case READ_DISCRETE_INPUTS:
+            // Аналогично READ_COILS
+            break;
+        case READ_HOLDING_REGISTERS:
+            handleReadHoldingRegisters(frame);
+            break;
+        case READ_INPUT_REGISTERS:
+            // Аналогично READ_HOLDING_REGISTERS
+            break;
+        case WRITE_SINGLE_COIL:
+            // Аналогично WRITE_SINGLE_REGISTER
+            break;
+        case WRITE_SINGLE_REGISTER:
+            handleWriteSingleRegister(frame);
+            break;
+        case WRITE_MULTIPLE_COILS:
+            // Аналогично WRITE_MULTIPLE_REGISTERS
+            break;
+        case WRITE_MULTIPLE_REGISTERS:
+            handleWriteMultipleRegisters(frame);
+            break;
+        default:
+            createErrorResponse(function_code, ILLEGAL_FUNCTION);
+            break;
+    }
+}
+
+// int main() {
+//     while (1) {
+//         if (frame_received) {
+//             process_modbus_frame(rx_buffer, rx_index);
+//             rx_index = 0;
+//             frame_received = 0;
+//         }
+//
+//         // Отображение текущего состояния регистров
+//         static uint16_t display_counter = 0;
+//         if (display_counter++ > 1000) {
+//             display_number(registers.holding_registers[0]);
+//             display_counter = 0;
+//         }
+//
+//         _delay_ms(1);
+//     }
+//
+//     return 0;
+// }

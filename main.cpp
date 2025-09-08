@@ -1,11 +1,7 @@
-#include <stdio.h>
-#include <stdlib.h>
+
 #include <unistd.h>
-#include <fcntl.h>
 #include <termios.h>
 #include <iostream>
-#include <sys/select.h>
-#include "serial_port_util.h"  // с print_buffer и configure_port
 #include "modbus_rtu_reader.h"
 
 #define BUF_SIZE 256
@@ -14,7 +10,7 @@
 int main() {
 
     try {
-        const ModbusRTUReader reader("/dev/ttys007", B9600);
+        ModbusRTUReader reader("/dev/ttys002", B9600);
         reader.readLoop();
     }
     catch (const std::exception& ex) {
