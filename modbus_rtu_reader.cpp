@@ -282,7 +282,7 @@ void ModbusRTUReader::handleWriteSingleRegister(std::vector<uint8_t> &frame) {
     tx_buffer[6] = crc & 0xFF;
     tx_buffer[7] = (crc >> 8) & 0xFF;
 
-    sendResponseToMaster(tx_buffer, 7);
+    sendResponseToMaster(tx_buffer, 7 +1);
 }
 
 // Обработка команды Write Multiple Registers (0x10)
@@ -314,7 +314,7 @@ void ModbusRTUReader::handleWriteMultipleRegisters(std::vector<uint8_t> &frame) 
     tx_buffer[6] = crc & 0xFF;
     tx_buffer[7] = (crc >> 8) & 0xFF;
 
-    sendResponseToMaster(tx_buffer, 7);
+    sendResponseToMaster(tx_buffer, 7 +1);
 }
 
 // Обработка Modbus кадра
@@ -350,24 +350,3 @@ void ModbusRTUReader::processRequestADU(std::vector<uint8_t> &frame) {
             break;
     }
 }
-
-// int main() {
-//     while (1) {
-//         if (frame_received) {
-//             process_modbus_frame(rx_buffer, rx_index);
-//             rx_index = 0;
-//             frame_received = 0;
-//         }
-//
-//         // Отображение текущего состояния регистров
-//         static uint16_t display_counter = 0;
-//         if (display_counter++ > 1000) {
-//             display_number(registers.holding_registers[0]);
-//             display_counter = 0;
-//         }
-//
-//         _delay_ms(1);
-//     }
-//
-//     return 0;
-// }
