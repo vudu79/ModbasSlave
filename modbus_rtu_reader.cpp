@@ -131,12 +131,12 @@ void ModbusRTUReader::checkRequestADU(std::vector<uint8_t> &packet) {
 }
 
 void ModbusRTUReader::printHEXPacket(std::vector<uint8_t> &packet) {
-    uint8_t functionNumber = packet[1];
     uint8_t slaveNumber = packet[0];
-    if (functionNumber  & 0x80) {
-        printf("Пакет с кодом ошибки на команду № %d от устройства № %d сформирован: ", functionNumber, slaveNumber);
+    uint8_t functionCode = packet[1];
+    if (functionCode  & 0x80) {
+        printf("Пакет с кодом ошибки на команду № %d от устройства № %d сформирован: ", functionCode, slaveNumber);
     }
-    printf("Ответный пакет на команду № %d от устройства № %d сформирован: ", functionNumber, slaveNumber);
+    printf("Ответный пакет на команду № %d от устройства № %d сформирован: ", functionCode, slaveNumber);
     for (auto b: packet) {
         printf("%02X ", b);
     }
@@ -206,6 +206,7 @@ void ModbusRTUReader::handleReadCoils(std::vector<uint8_t> &frame) const {
     uint16_t quantity = (frame[4] << 8) | frame[5];
 
     if (start_address + quantity > MAX_REGISTERS) {
+
         createErrorResponse(READ_COILS, ILLEGAL_DATA_ADDRESS);
         return;
     }
@@ -228,8 +229,10 @@ void ModbusRTUReader::handleReadCoils(std::vector<uint8_t> &frame) const {
     uint16_t crc = crc16_modbus(tx_buffer, 3 + byte_count);
     tx_buffer[3 + byte_count] = crc & 0xFF;
     tx_buffer[4 + byte_count] = (crc >> 8) & 0xFF;
+    printf("crc - %x\n", tx_buffer[3 + byte_count]);
+    printf("crc - %x\n", tx_buffer[4 + byte_count]);
 
-    sendResponseToMaster(tx_buffer, 4 + byte_count);
+    sendResponseToMaster(tx_buffer, 4 + byte_count +1);
 }
 
 // Обработка команды Read Holding Registers (0x03) Чтение аналоговых выходов
