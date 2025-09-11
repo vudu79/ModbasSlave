@@ -9,7 +9,6 @@
 #include <vector>
 #include <termios.h> // Для speed_t
 
-
 // Modbus константы
 #define MODBUS_SLAVE_ADDRESS 0x01
 #define MODBUS_BROADCAST_ADDRESS 0x00
